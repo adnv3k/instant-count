@@ -1,0 +1,66 @@
+# Compiled output
+out/
+*.vsix
+
+# Node modules
+node_modules/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE
+.vscode/settings.json
+.vscode/launch.json
+.vscode/extensions.json
+.history/
+
+# TypeScript
+*.tsbuildinfo
+
+# Local dev files
+*.local
+.env
+.env.local
+
+# Temporary files
+*.tmp
+*.temp
+.lh/
+
+# VS Code Extension packaging
+.vscode-test/
+.vscode-test/**
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Editor swap/backup files
+*~
+*.swp
+*.swo
+*.bak
+
+# Mac system files
+.AppleDouble
+.LSOverride
+
+# Windows system files
+Desktop.ini
+
+# npm package logs
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+

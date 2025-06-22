@@ -1,0 +1,43 @@
+{
+  "root": true,
+  "env": {
+    "es2022": true,
+    "node": true
+  },
+  "parser": "@typescript-eslint/parser",
+  "parserOptions": {
+    "project": "./tsconfig.json",
+    "sourceType": "module"
+  },
+  "plugins": ["@typescript-eslint"],
+  "extends": [
+    "eslint:recommended",
+    "plugin:@typescript-eslint/recommended",
+    "prettier"
+  ],
+  "rules": {
+    /* ── style you care about ── */
+    "quotes": ["error", "single", { "avoidEscape": true }],
+    "semi": ["error", "always"],
+    /* ── pragmatic relaxations ── */
+    "no-console": "off",                       /* allow console.* while iterating */
+    "@typescript-eslint/no-explicit-any": "off",
+    "@typescript-eslint/no-unsafe-member-access": "off",
+    "@typescript-eslint/no-unsafe-call": "off",
+    "@typescript-eslint/no-unsafe-argument": "off",
+    "@typescript-eslint/no-unsafe-assignment": "off",
+    "@typescript-eslint/restrict-template-expressions": "off",
+    "@typescript-eslint/no-floating-promises": [
+      "warn",
+      { "ignoreIIFE": true }
+    ],
+    "prefer-const": "warn"
+  },
+  "ignorePatterns": [
+    "out/**",
+    "dist/**",
+    "assets/**",
+    "*.gif",
+    "*.png"
+  ]
+}

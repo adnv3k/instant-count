@@ -1,0 +1,35 @@
+# Development files
+.vscode/
+.vscode-test/
+.github/
+src/**/*.ts
+src/**/*.map
+**/*.ts
+**/*.map
+**/tsconfig.json
+**/.eslintrc.json
+
+# Tests and development
+test/
+src/test/
+out/test/
+*.test.*
+.nyc_output/
+
+# Documentation and assets not needed in package
+docs/
+assets/icon-source.svg
+CONTRIBUTING.md
+DEVELOPMENT.md
+
+# Build and development
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.lh/
+*.zip
+
+# OS files
+**/.DS_Store
+.gitignore

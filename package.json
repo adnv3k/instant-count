@@ -1,0 +1,209 @@
+{
+	"name": "instant-count",
+	"displayName": "Instant Count - Real-time Text Counter",
+	"description": "Instantly count highlighted text, words, and patterns with custom regex rules, live gutter badges, and status bar feedback. Perfect for code analysis and text processing.",
+	"version": "1.0.0",
+	"publisher": "adnv3k",
+	"icon": "assets/screenshots/icon.png",
+	"galleryBanner": {
+		"color": "#1e1e1e",
+		"theme": "dark"
+	},
+	"engines": {
+		"vscode": "^1.89.0"
+	},
+	"categories": [
+		"Programming Languages",
+		"Linters",
+		"Other"
+	],
+	"keywords": [
+		"count",
+		"counter",
+		"occurrences",
+		"text analysis",
+		"regex",
+		"search",
+		"highlight",
+		"gutter badges",
+		"status bar",
+		"real-time",
+		"instant",
+		"pattern matching",
+		"multi-cursor",
+		"peek view",
+		"word count",
+		"find count",
+		"text count",
+		"instance count",
+		"vscode",
+		"count selected text",
+		"number of occurrences",
+		"real-time counter",
+		"regular expression",
+		"highlight-counter",
+		"occurrence-count"
+	],
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/adnv3k/instant-count"
+	},
+	"bugs": {
+		"url": "https://github.com/adnv3k/instant-count/issues"
+	},
+	"homepage": "https://github.com/adnv3k/instant-count#readme",
+	"license": "MIT",
+	"activationEvents": [
+		"onStartupFinished",
+		"onLanguage:*"
+	],
+	"main": "./out/extension.js",
+	"contributes": {
+		"commands": [
+			{
+				"command": "instant-count.toggleCase",
+				"title": "Toggle Case Sensitivity",
+				"category": "Instant Count"
+			},
+			{
+				"command": "instant-count.toggleWholeWord",
+				"title": "Toggle Whole Word Match",
+				"category": "Instant Count"
+			},
+			{
+				"command": "instant-count.toggleRegex",
+				"title": "Toggle Regex Mode",
+				"category": "Instant Count"
+			},
+			{
+				"command": "instant-count.toggleGutterBadges",
+				"title": "Toggle Gutter Badges",
+				"category": "Instant Count"
+			},
+			{
+				"command": "instant-count.toggleStatusBar",
+				"title": "Toggle Status Bar Display",
+				"category": "Instant Count"
+			},
+			{
+				"command": "instant-count.enterRegex",
+				"title": "Enter Regex Rules",
+				"category": "Instant Count"
+			},
+			{
+				"command": "instant-count.clearRegex",
+				"title": "Clear Custom Rules",
+				"category": "Instant Count"
+			},
+			{
+				"command": "instant-count.cycleMode",
+				"title": "Cycle Search Modes",
+				"category": "Instant Count"
+			},
+			{
+				"command": "instant-count.showConfigPanel",
+				"title": "Show Configuration Panel",
+				"category": "Instant Count"
+			},
+			{
+				"command": "instant-count.selectAll",
+				"title": "Select All Occurrences",
+				"category": "Instant Count"
+			},
+			{
+				"command": "instant-count.peekAll",
+				"title": "Peek All Occurrences",
+				"category": "Instant Count"
+			},
+			{
+				"command": "instant-count.nextPage",
+				"title": "Next Page",
+				"category": "Instant Count"
+			},
+			{
+				"command": "instant-count.prevPage",
+				"title": "Previous Page",
+				"category": "Instant Count"
+			}
+		],
+		"configuration": {
+			"type": "object",
+			"title": "Instant Count",
+			"properties": {
+				"instant-count.caseSensitive": {
+					"type": "boolean",
+					"default": false,
+					"description": "Use case-sensitive matching"
+				},
+				"instant-count.wholeWord": {
+					"type": "boolean",
+					"default": false,
+					"description": "Match only whole words"
+				},
+				"instant-count.useRegex": {
+					"type": "boolean",
+					"default": false,
+					"description": "Enable regex mode and apply custom transformation rules to highlighted text"
+				},
+				"instant-count.showGutterBadges": {
+					"type": "boolean",
+					"default": true,
+					"description": "Show badges in the gutter for matches"
+				},
+				"instant-count.showInStatusBar": {
+					"type": "boolean",
+					"default": true,
+					"description": "Show the live count in the status bar"
+				},
+				"instant-count.debug": {
+					"type": "boolean",
+					"default": false,
+					"description": "Enable debug logging for troubleshooting"
+				},
+				"instant-count.regexRules": {
+					"type": "string",
+					"default": "",
+					"description": "Custom regex transformation rules (use $TEXT for escaped text, $RAWTEXT for raw text)"
+				}
+			}
+		},
+		"keybindings": [
+			{
+				"command": "instant-count.selectAll",
+				"key": "ctrl+shift+alt+s",
+				"when": "editorTextFocus"
+			},
+			{
+				"command": "instant-count.enterRegex",
+				"key": "ctrl+shift+alt+r",
+				"when": "editorTextFocus"
+			},
+			{
+				"command": "instant-count.peekAll",
+				"key": "ctrl+shift+3",
+				"when": "editorTextFocus"
+			}
+		]
+	},
+	"scripts": {
+		"vscode:prepublish": "npm run compile",
+		"compile": "tsc -p ./",
+		"watch": "tsc -w -p ./",
+		"pretest": "npm run compile && npm run lint",
+		"lint": "eslint --ext .ts src",
+		"lint:fix": "npm run lint -- --fix"
+	},
+	"devDependencies": {
+		"@types/mocha": "^10.0.10",
+		"@types/node": "^20.11.0",
+		"@types/vscode": "^1.89.0",
+		"@typescript-eslint/eslint-plugin": "^6.21.0",
+		"@typescript-eslint/parser": "^6.21.0",
+		"@vscode/test-electron": "^2.5.2",
+		"eslint": "^8.57.1",
+		"eslint-config-prettier": "^10.1.5",
+		"eslint-plugin-import": "^2.32.0",
+		"eslint-plugin-node": "^11.1.0",
+		"typescript": "5.3"
+	}
+}
