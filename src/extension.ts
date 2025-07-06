@@ -94,11 +94,17 @@ async function streamLiteralMatches(
 ): Promise<{ total: number; windowMatches: vscode.Range[] }> {
 
 	if (!needle) return { total: 0, windowMatches: [] };
-	const needleLC = needle.toLowerCase();
-	const textLC = text.toLowerCase();
+	
+	// Check if case sensitive mode is enabled
+	const config = vscode.workspace.getConfiguration('instant-count');
+	const caseSensitive = config.get<boolean>('caseSensitive', false);
+	
+	// Only convert to lowercase if case insensitive
+	const needleToSearch = caseSensitive ? needle : needle.toLowerCase();
+	const textToSearch = caseSensitive ? text : text.toLowerCase();
 	const windowMatches: vscode.Range[] = [];
 
-	const len = textLC.length;
+	const len = textToSearch.length;
 	const chunkChars = 10_000;                    // scan ~100 kB per yield
 	let total = 0;
 	let idx = 0;
@@ -107,7 +113,7 @@ async function streamLiteralMatches(
 	while (idx < len) {
 		if (myToken !== scanToken) return { total: -1, windowMatches: [] }; // cancelled
 
-		const pos = textLC.indexOf(needleLC, idx);
+		const pos = textToSearch.indexOf(needleToSearch, idx);
 		if (pos === -1) break;
 		total++;
 
@@ -439,8 +445,9 @@ function getSearchPattern(
 					isRegexPattern: true,
 				};
 			}
+			// For literal matching, use the raw text without escaping
 			return {
-				searchPattern: escapeRegex(txt),
+				searchPattern: txt,
 				searchDisplayText: sanitizeDisplayText(txt),
 				isRegexPattern: false,
 			};
@@ -461,12 +468,22 @@ function getSearchPattern(
 					isRegexPattern: true,
 				};
 			}
-			const p = ww ? `\\b${escapeRegex(word)}\\b` : escapeRegex(word);
-			return {
-				searchPattern: p,
-				searchDisplayText: sanitizeDisplayText(word),
-				isRegexPattern: false,
-			};
+			// For word matching, we need regex when whole word is enabled
+			if (ww) {
+				const p = `\\b${escapeRegex(word)}\\b`;
+				return {
+					searchPattern: p,
+					searchDisplayText: sanitizeDisplayText(word),
+					isRegexPattern: true,
+				};
+			} else {
+				// For simple word matching without whole word, use literal matching
+				return {
+					searchPattern: word,
+					searchDisplayText: sanitizeDisplayText(word),
+					isRegexPattern: false,
+				};
+			}
 		}
 	}
 	return null;
