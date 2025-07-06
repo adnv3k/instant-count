@@ -9,6 +9,8 @@ adheres to [Semantic Versioning](https://semver.org/)._
 
 ### Fixed
 - **Special character handling in highlighted text** - Fixed issue where highlighting text containing special regex characters like `)`, `.`, `*`, `+`, etc. would break the counting functionality. The extension now properly distinguishes between literal text matching (for selections) and regex pattern matching, ensuring accurate counts regardless of special characters in the highlighted text.
+- **Extension activation compatibility** - Removed `onLanguage:*` activation event to comply with VS Code marketplace validation requirements. Extension now activates using `onStartupFinished` only, ensuring better performance and marketplace compliance while maintaining full functionality.
+
 
 ### Changed
 - **Code quality improvements** - Refactored `getSearchPattern()` function to reduce code duplication by extracting common return structures into a `createSearchResult()` helper function, improving maintainability and consistency.

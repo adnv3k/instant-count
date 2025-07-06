@@ -54,8 +54,7 @@
 	"homepage": "https://github.com/adnv3k/instant-count#readme",
 	"license": "MIT",
 	"activationEvents": [
-		"onStartupFinished",
-		"onLanguage:*"
+		"onStartupFinished"
 	],
 	"main": "./out/extension.js",
 	"contributes": {
