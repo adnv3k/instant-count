@@ -94,11 +94,17 @@ async function streamLiteralMatches(
 ): Promise<{ total: number; windowMatches: vscode.Range[] }> {
 
 	if (!needle) return { total: 0, windowMatches: [] };
-	const needleLC = needle.toLowerCase();
-	const textLC = text.toLowerCase();
+	
+	// Check if case sensitive mode is enabled
+	const config = vscode.workspace.getConfiguration('instant-count');
+	const caseSensitive = config.get<boolean>('caseSensitive', false);
+	
+	// Only convert to lowercase if case insensitive
+	const needleToSearch = caseSensitive ? needle : needle.toLowerCase();
+	const textToSearch = caseSensitive ? text : text.toLowerCase();
 	const windowMatches: vscode.Range[] = [];
 
-	const len = textLC.length;
+	const len = textToSearch.length;
 	const chunkChars = 10_000;                    // scan ~100 kB per yield
 	let total = 0;
 	let idx = 0;
@@ -107,7 +113,7 @@ async function streamLiteralMatches(
 	while (idx < len) {
 		if (myToken !== scanToken) return { total: -1, windowMatches: [] }; // cancelled
 
-		const pos = textLC.indexOf(needleLC, idx);
+		const pos = textToSearch.indexOf(needleToSearch, idx);
 		if (pos === -1) break;
 		total++;
 
@@ -406,6 +412,17 @@ function getSearchPattern(
 	// Keep multipoint pattern if set by peek view
 	if (preservedMultipointPattern) return preservedMultipointPattern;
 
+	// Helper to create search pattern result
+	const createSearchResult = (
+		pattern: string, 
+		displayText: string, 
+		isRegex: boolean
+	) => ({
+		searchPattern: pattern,
+		searchDisplayText: sanitizeDisplayText(displayText),
+		isRegexPattern: isRegex,
+	});
+
 	// Helper to maybe apply rules
 	const applyRules = (txt: string) => {
 		if (!customTransformRules || !useRegex) return escapeRegex(txt);
@@ -421,11 +438,7 @@ function getSearchPattern(
 		const pattern = sels
 			.map(s => (useRegex && customTransformRules ? applyRules(s) : escapeRegex(s)))
 			.join('.*?');
-		return {
-			searchPattern: pattern,
-			searchDisplayText: sels.map(() => '$TEXT').join('.*?'),
-			isRegexPattern: true,
-		};
+		return createSearchResult(pattern, sels.map(() => '$TEXT').join('.*?'), true);
 	}
 
 	// 2. Single selection
@@ -433,17 +446,10 @@ function getSearchPattern(
 		const txt = editor.document.getText(editor.selection);
 		if (txt.trim()) {
 			if (useRegex && customTransformRules) {
-				return {
-					searchPattern: applyRules(txt),
-					searchDisplayText: sanitizeDisplayText(txt),
-					isRegexPattern: true,
-				};
+				return createSearchResult(applyRules(txt), txt, true);
 			}
-			return {
-				searchPattern: escapeRegex(txt),
-				searchDisplayText: sanitizeDisplayText(txt),
-				isRegexPattern: false,
-			};
+			// For literal matching, use the raw text without escaping
+			return createSearchResult(txt, txt, false);
 		}
 	}
 
@@ -455,18 +461,15 @@ function getSearchPattern(
 			const ww = cfg.get<boolean>('wholeWord', false);
 			if (useRegex && customTransformRules) {
 				const p = applyRules(word);
-				return {
-					searchPattern: ww ? `\\b${p}\\b` : p,
-					searchDisplayText: sanitizeDisplayText(word),
-					isRegexPattern: true,
-				};
+				return createSearchResult(ww ? `\\b${p}\\b` : p, word, true);
 			}
-			const p = ww ? `\\b${escapeRegex(word)}\\b` : escapeRegex(word);
-			return {
-				searchPattern: p,
-				searchDisplayText: sanitizeDisplayText(word),
-				isRegexPattern: false,
-			};
+			// For word matching, we need regex when whole word is enabled
+			if (ww) {
+				return createSearchResult(`\\b${escapeRegex(word)}\\b`, word, true);
+			} else {
+				// For simple word matching without whole word, use literal matching
+				return createSearchResult(word, word, false);
+			}
 		}
 	}
 	return null;

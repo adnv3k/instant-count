@@ -2,7 +2,7 @@
 	"name": "instant-count",
 	"displayName": "Instant Count - Real-time Text Counter",
 	"description": "Instantly count highlighted text, words, and patterns with custom regex rules, live gutter badges, and status bar feedback. Perfect for code analysis and text processing.",
-	"version": "1.0.0",
+	"version": "1.0.1",
 	"publisher": "adnv3k",
 	"icon": "assets/screenshots/icon.png",
 	"galleryBanner": {
