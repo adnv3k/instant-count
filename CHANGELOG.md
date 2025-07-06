@@ -10,6 +10,9 @@ adheres to [Semantic Versioning](https://semver.org/)._
 ### Fixed
 - **Special character handling in highlighted text** - Fixed issue where highlighting text containing special regex characters like `)`, `.`, `*`, `+`, etc. would break the counting functionality. The extension now properly distinguishes between literal text matching (for selections) and regex pattern matching, ensuring accurate counts regardless of special characters in the highlighted text.
 
+### Changed
+- **Code quality improvements** - Refactored `getSearchPattern()` function to reduce code duplication by extracting common return structures into a `createSearchResult()` helper function, improving maintainability and consistency.
+
 ---
 
 ## [1.0.0] – 2025-06-21  (first public release)
