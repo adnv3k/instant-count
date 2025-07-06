@@ -412,6 +412,17 @@ function getSearchPattern(
 	// Keep multipoint pattern if set by peek view
 	if (preservedMultipointPattern) return preservedMultipointPattern;
 
+	// Helper to create search pattern result
+	const createSearchResult = (
+		pattern: string, 
+		displayText: string, 
+		isRegex: boolean
+	) => ({
+		searchPattern: pattern,
+		searchDisplayText: sanitizeDisplayText(displayText),
+		isRegexPattern: isRegex,
+	});
+
 	// Helper to maybe apply rules
 	const applyRules = (txt: string) => {
 		if (!customTransformRules || !useRegex) return escapeRegex(txt);
@@ -427,11 +438,7 @@ function getSearchPattern(
 		const pattern = sels
 			.map(s => (useRegex && customTransformRules ? applyRules(s) : escapeRegex(s)))
 			.join('.*?');
-		return {
-			searchPattern: pattern,
-			searchDisplayText: sels.map(() => '$TEXT').join('.*?'),
-			isRegexPattern: true,
-		};
+		return createSearchResult(pattern, sels.map(() => '$TEXT').join('.*?'), true);
 	}
 
 	// 2. Single selection
@@ -439,18 +446,10 @@ function getSearchPattern(
 		const txt = editor.document.getText(editor.selection);
 		if (txt.trim()) {
 			if (useRegex && customTransformRules) {
-				return {
-					searchPattern: applyRules(txt),
-					searchDisplayText: sanitizeDisplayText(txt),
-					isRegexPattern: true,
-				};
+				return createSearchResult(applyRules(txt), txt, true);
 			}
 			// For literal matching, use the raw text without escaping
-			return {
-				searchPattern: txt,
-				searchDisplayText: sanitizeDisplayText(txt),
-				isRegexPattern: false,
-			};
+			return createSearchResult(txt, txt, false);
 		}
 	}
 
@@ -462,27 +461,14 @@ function getSearchPattern(
 			const ww = cfg.get<boolean>('wholeWord', false);
 			if (useRegex && customTransformRules) {
 				const p = applyRules(word);
-				return {
-					searchPattern: ww ? `\\b${p}\\b` : p,
-					searchDisplayText: sanitizeDisplayText(word),
-					isRegexPattern: true,
-				};
+				return createSearchResult(ww ? `\\b${p}\\b` : p, word, true);
 			}
 			// For word matching, we need regex when whole word is enabled
 			if (ww) {
-				const p = `\\b${escapeRegex(word)}\\b`;
-				return {
-					searchPattern: p,
-					searchDisplayText: sanitizeDisplayText(word),
-					isRegexPattern: true,
-				};
+				return createSearchResult(`\\b${escapeRegex(word)}\\b`, word, true);
 			} else {
 				// For simple word matching without whole word, use literal matching
-				return {
-					searchPattern: word,
-					searchDisplayText: sanitizeDisplayText(word),
-					isRegexPattern: false,
-				};
+				return createSearchResult(word, word, false);
 			}
 		}
 	}
