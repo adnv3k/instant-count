@@ -23,7 +23,7 @@
 1. **Install** from the VS Code Marketplace: `instant-count`.  
 2. **Select** text (or just place the cursor on a word).  
 3. Watch the **status-bar counter** and **gutter badges** appear.  
-4. Hit `Ctrl + Shift + R` to open the quick-config panel.
+4. Hit `Ctrl + Shift + Alt + C` (or click the status-bar counter) to open the quick-config panel.
 
 ---
 
@@ -78,18 +78,22 @@ _Open **Command Palette → “Instant Count: Settings”** for the interactive 
 
 | Command | Keybinding | What it does |
 | :-- | :--: | :-- |
-| Toggle Case | none | Switch case sensitivity |
-| Toggle Whole Word | none | Add/remove word boundaries |
-| Toggle Regex Mode | none | Literal ↔ regex |
-| Peek All Matches | `Ctrl + Shift + 3` | Open VS Code peek panel |
+| Open Config Panel | `Ctrl + Shift + Alt + C` (or click the status-bar counter) | Toggle case / whole-word / regex / badges in place |
+| Enter Regex Rules | `Ctrl + Shift + Alt + R` | Define `$TEXT` rules (validated live) |
 | Select All Matches | `Ctrl + Shift + Alt + S` | Multi-cursor select |
+| Peek All Matches | `Ctrl + Shift + Alt + P` (or `Ctrl + Shift + 3`) | Open VS Code peek panel |
+| Go to Next / Previous Match | `Ctrl + Shift + Alt + .` / `Ctrl + Shift + Alt + ,` | Jump between matches, wrap-around |
+| Toggle Case / Whole Word / Regex | Command Palette | Individual mode toggles |
+
+*(macOS uses `Cmd` in place of `Ctrl`.)*
 
 ---
 
 ## 🛡 Performance & Safety
 
-* Chunked scanning keeps UI fluid even on **10 MB+** files.  
-* Regex execution has a **500 ms timeout guard** to avoid catastrophic back-tracking freezes.  
+* Full features (regex rules, whole-word, badges) up to **10 MB / 100k lines**.  
+* Beyond that, **large-file mode** keeps literal counting and viewport badges alive up to **50 MB**.  
+* Regex execution has a **1 s watchdog** — catastrophic back-tracking aborts with a visible warning instead of freezing.  
 * Badges are only rendered inside (and near) the view-port for zero scroll-lag.
 
 ---
