@@ -14,7 +14,12 @@ const badgeCache: Map<number, vscode.TextEditorDecorationType> = new Map();
 
 // Decorations currently rendered in the active editor 
 const activeDecorations: Map<vscode.TextEditorDecorationType, boolean> = new Map();
-let cachedAllMatches: vscode.Range[] = [];
+// A match range paired with its 1-based global occurrence number
+interface CountedMatch { range: vscode.Range; occ: number }
+let cachedAllMatches: CountedMatch[] = [];
+// Set before programmatic selection changes (navigation, select-all) so the
+// selection listener doesn't reset the active pattern/count.
+let programmaticSelectionGuard = false;
 let cachedSearchPattern: string | null = null;
 // Multipoint peek-view pattern preservation
 let preservedMultipointPattern:
@@ -23,8 +28,13 @@ let preservedMultipointPattern:
 
 // Simple cancellation token – increment to abort any in-flight scan 
 let scanToken = 0;
-const MAX_MB = 10 * 1024 * 1024;
-const MAX_LINES = 100_000;
+// Full experience (regex rules, whole-word) up to these limits...
+const FULL_FEATURE_BYTES = 10 * 1024 * 1024;
+const FULL_FEATURE_LINES = 100_000;
+// ...then a literal-only large-file mode up to this hard ceiling.
+const LARGE_FILE_BYTES = 50 * 1024 * 1024;
+// Watchdog for all regex scans.
+const REGEX_TIMEOUT_MS = 1000;
 
 
 // Helper: cross-platform requestAnimationFrame fallback for VS Code/Electron/Node
@@ -48,6 +58,13 @@ function loadRegexRulesFromConfig() {
 	const savedRules = config.get<string>('regexRules', '');
 	if (savedRules && savedRules.trim().length > 0) {
 		customTransformRules = savedRules;
+	}
+}
+
+// Gated debug logging - enable with the "instant-count.debug" setting
+function dbg(...args: unknown[]) {
+	if (vscode.workspace.getConfiguration('instant-count').get<boolean>('debug', false)) {
+		console.log('[instant-count]', ...args);
 	}
 }
 
@@ -76,8 +93,8 @@ function sanitizeDisplayText(text: string): string {
 	}
 	// Replace problematic characters for display
 	return text
-		.replace(/"/g, "'")  // Replace double quotes with single quotes
-		.replace(/'/g, "'")  // Normalize single quotes
+		.replace(/[\u201C\u201D"]/g, "'")  // Straight/curly double quotes -> apostrophe
+		.replace(/[\u2018\u2019]/g, "'")  // Curly single quotes -> apostrophe
 		.replace(/\r?\n/g, ' ')  // Replace newlines with spaces
 		.replace(/\t/g, ' ')     // Replace tabs with spaces
 		.replace(/\s+/g, ' ')    // Collapse multiple spaces
@@ -87,25 +104,24 @@ function sanitizeDisplayText(text: string): string {
 		.substring(0, 200); // Limit length to prevent overly long tooltips
 }
 
-// Stream literal matches with a timeout and yield mechanism
+// Stream literal matches, yielding periodically. Positions are resolved only
+// for matches near the visible window (winStartOff..winEndOff, char offsets).
 async function streamLiteralMatches(
 	ed: vscode.TextEditor, text: string, needle: string,
-	renderStartLine: number, renderEndLine: number, myToken: number
-): Promise<{ total: number; windowMatches: vscode.Range[] }> {
+	winStartOff: number, winEndOff: number, myToken: number
+): Promise<{ total: number; windowMatches: CountedMatch[] }> {
 
 	if (!needle) return { total: 0, windowMatches: [] };
-	
-	// Check if case sensitive mode is enabled
+
 	const config = vscode.workspace.getConfiguration('instant-count');
 	const caseSensitive = config.get<boolean>('caseSensitive', false);
-	
-	// Only convert to lowercase if case insensitive
+
 	const needleToSearch = caseSensitive ? needle : needle.toLowerCase();
 	const textToSearch = caseSensitive ? text : text.toLowerCase();
-	const windowMatches: vscode.Range[] = [];
+	const windowMatches: CountedMatch[] = [];
 
 	const len = textToSearch.length;
-	const chunkChars = 10_000;                    // scan ~100 kB per yield
+	const chunkChars = 100_000;                   // yield roughly every 100k chars scanned
 	let total = 0;
 	let idx = 0;
 	let nextYieldAt = chunkChars;
@@ -117,10 +133,10 @@ async function streamLiteralMatches(
 		if (pos === -1) break;
 		total++;
 
-		const startPos = ed.document.positionAt(pos);
-		if (startPos.line >= renderStartLine && startPos.line <= renderEndLine) {
+		if (pos <= winEndOff && pos + needle.length >= winStartOff) {
+			const startPos = ed.document.positionAt(pos);
 			const endPos = ed.document.positionAt(pos + needle.length);
-			windowMatches.push(new vscode.Range(startPos, endPos));
+			windowMatches.push({ range: new vscode.Range(startPos, endPos), occ: total });
 		}
 		idx = pos + (needle.length || 1);
 
@@ -132,16 +148,18 @@ async function streamLiteralMatches(
 	}
 	return { total, windowMatches };
 }
-// Stream regex matches with a timeout and yield mechanism
+// Stream regex matches with a watchdog. Returns total = -1 if superseded by a
+// newer scan, -2 if the watchdog fired (likely catastrophic backtracking).
 async function streamRegexMatches(
 	editor: vscode.TextEditor, text: string, rx: RegExp,
-	renderStartLine: number, renderEndLine: number,
-	myToken: number, timeoutMs = 1000
-): Promise<{ total: number; windowMatches: vscode.Range[] }> {
+	winStartOff: number, winEndOff: number,
+	myToken: number, timeoutMs = REGEX_TIMEOUT_MS
+): Promise<{ total: number; windowMatches: CountedMatch[] }> {
 
 	const safe = rx.global ? rx : new RegExp(rx.source, rx.flags + 'g');
+	safe.lastIndex = 0;
 	const start = Date.now();
-	const windowMatches: vscode.Range[] = [];
+	const windowMatches: CountedMatch[] = [];
 	let total = 0; let m: RegExpExecArray | null;
 	let yieldCounter = 0;
 
@@ -149,17 +167,20 @@ async function streamRegexMatches(
 		if (myToken !== scanToken) return { total: -1, windowMatches: [] }; // cancelled
 		total++; yieldCounter++;
 
-		const p = editor.document.positionAt(m.index);
-		if (p.line >= renderStartLine && p.line <= renderEndLine) {
+		if (m.index <= winEndOff && m.index + m[0].length >= winStartOff) {
+			const p = editor.document.positionAt(m.index);
 			const e = editor.document.positionAt(m.index + m[0].length);
-			windowMatches.push(new vscode.Range(p, e));
+			windowMatches.push({ range: new vscode.Range(p, e), occ: total });
 		}
+
+		// Guard: a zero-length match would otherwise never advance lastIndex
+		if (m[0].length === 0) safe.lastIndex++;
 
 		if (yieldCounter >= 500) {                                 // yield every 500 hits
 			yieldCounter = 0;
 			await new Promise<void>(resolve => requestAnimationFramePolyfill(resolve));
 		}
-		if (Date.now() - start > timeoutMs) return { total: -1, windowMatches: [] };
+		if (Date.now() - start > timeoutMs) return { total: -2, windowMatches: [] }; // timed out
 	}
 	return { total, windowMatches };
 }
@@ -187,6 +208,15 @@ export function activate(context: vscode.ExtensionContext) {
 				.join('|');
 			const txt = ed.selections.map(sel => ed.document.getText(sel)).join('|');
 
+			if (programmaticSelectionGuard) {
+				// Selection was set by Instant Count itself (navigation / select-all):
+				// keep the current pattern and count pinned.
+				programmaticSelectionGuard = false;
+				lastSelectionKey = key;
+				lastSelectionText = txt;
+				return;
+			}
+
 			if (key !== lastSelectionKey || txt !== lastSelectionText) {
 				lastSelectionKey = key;
 				lastSelectionText = txt;
@@ -206,6 +236,13 @@ export function activate(context: vscode.ExtensionContext) {
 		// Use longer debounce for scroll to reduce flicker
 		vscode.window.onDidChangeTextEditorVisibleRanges(() => debouncedScrollUpdate()),
 		vscode.workspace.onDidChangeTextDocument(() => debouncedTextUpdate()),
+		vscode.window.onDidChangeActiveColorTheme(() => {
+			// Badge SVGs bake in theme colors - rebuild them for the new theme
+			clearAllDecorations();
+			void disposeDecorationsAsync();
+			currentBufferState = { startLine: -1, endLine: -1, searchPattern: '', activeLines: new Set() };
+			debouncedTextUpdate();
+		}),
 		vscode.workspace.onDidChangeConfiguration(e => {
 			if (e.affectsConfiguration('instant-count.regexRules')) {
 				loadRegexRulesFromConfig();
@@ -227,7 +264,9 @@ export function activate(context: vscode.ExtensionContext) {
 		vscode.commands.registerCommand('instant-count.cycleMode', async () => await cycleModes()),
 		vscode.commands.registerCommand('instant-count.showConfigPanel', showConfigPanel),
 		vscode.commands.registerCommand('instant-count.selectAll', async () => await selectAllOccurrences()),
-		vscode.commands.registerCommand('instant-count.peekAll', async () => await peekAllOccurrences())
+		vscode.commands.registerCommand('instant-count.peekAll', async () => await peekAllOccurrences()),
+		vscode.commands.registerCommand('instant-count.nextMatch', async () => await navigateMatch(1)),
+		vscode.commands.registerCommand('instant-count.prevMatch', async () => await navigateMatch(-1))
 	);
 
 	// Initial async update
@@ -300,20 +339,10 @@ async function updateCounts() {
 			return;
 		}
 
-		// const searchInfo = getSearchPattern(editor);		
-		const searchInfo = await Promise.resolve(getSearchPattern(editor));
+		const doc = editor.document;
+		const docSize = doc.offsetAt(doc.lineAt(doc.lineCount - 1).range.end);
 
-		if (editor.document.lineCount > MAX_LINES) {
-			if (!searchInfo || !searchInfo.searchDisplayText.trim().length) {
-				// File is huge *and* the user isn't highlighting anything.
-				// Skip scan entirely to stay responsive.
-				statusBar.text = '$(warning)';
-				statusBar.tooltip =
-					`Instant Count paused – ${editor.document.lineCount.toLocaleString()} lines.\n` +
-					'Highlight text to count inside the selection, or reload the file.';
-				statusBar.show(); await updateGutterBadgesAsync(editor); return;
-			}
-		}
+		const searchInfo = getSearchPattern(editor);
 		if (!searchInfo) {
 			statusBar.text = '$(search)';
 			statusBar.tooltip =
@@ -322,40 +351,75 @@ async function updateCounts() {
 			await updateGutterBadgesAsync(editor);
 			return;
 		}
-		if (editor.document.getText().length > MAX_MB || editor.document.lineCount > MAX_LINES) {
+
+		if (docSize > LARGE_FILE_BYTES) {
 			statusBar.text = '$(warning)';
-			statusBar.tooltip = 'Instant Count disabled – file too large.';
-			statusBar.show(); await updateGutterBadgesAsync(editor);
+			statusBar.tooltip =
+				`Instant Count paused - file is ${(docSize / (1024 * 1024)).toFixed(1)} MB ` +
+				`(limit ${LARGE_FILE_BYTES / (1024 * 1024)} MB).`;
+			statusBar.show();
+			clearAllDecorations();
 			return;
 		}
 
-		const text = editor.document.getText();
-		// Bail on extremely large files
-		if (text.length > 6 * 1024 * 1024) {
-			statusBar.text = '$(warning)';
-			statusBar.tooltip = 'Instant Count: File too large to process';
+		const oversized = docSize > FULL_FEATURE_BYTES || doc.lineCount > FULL_FEATURE_LINES;
+
+		const text = doc.getText();
+		const { renderStartLine, renderEndLine } = getRenderWindowLines(editor, 250);
+		const winStartOff = doc.offsetAt(new vscode.Position(renderStartLine, 0));
+		const winEndOff = doc.offsetAt(doc.lineAt(renderEndLine).range.end);
+
+		if (oversized) {
+			// Large-file mode: literal counting of the raw selection/word only.
+			// Regex rules and whole-word are skipped to keep the scan cheap and safe.
+			const needle = getRawNeedle(editor);
+			if (!needle) {
+				statusBar.text = '$(search)';
+				statusBar.tooltip = 'Instant Count (large file): select text or a word to count literal matches.';
+				statusBar.show();
+				return;
+			}
+			const res = await streamLiteralMatches(editor, text, needle, winStartOff, winEndOff, myToken);
+			if (res.total < 0) return; // superseded by a newer scan
+			cachedAllMatches = res.windowMatches;
+			cachedSearchPattern = `LARGE:${needle}`;
+			statusBar.text = `$(search) ${res.total}`;
+			const md = new vscode.MarkdownString(
+				`**${res.total}** matches *(large file mode)*\n\n---\n\n` +
+				'```\n' + formatWhitespaceForMarkdown(sanitizeDisplayText(needle)) + '\n```\n\n---\n\n' +
+				'Large file: literal matching only - regex rules and whole-word are ignored. ' +
+				'Badges cover the area around the viewport.'
+			);
+			statusBar.tooltip = md;
 			statusBar.show();
 			await updateGutterBadgesAsync(editor);
 			return;
 		}
+
 		const useRegex = cfg.get<boolean>('useRegex', false);
 		const regexIcon = useRegex ? '$(regex)' : '$(search)';
 		const needRegexScan = useRegex || searchInfo.isRegexPattern;
 		const regex = buildRegex(searchInfo.searchPattern);
 
-		// Do FULL document scan once and cache results
+		// Full-document scan; decoration ranges are collected only around the viewport.
 		let total = 0;
 
 		if (needRegexScan) {
-			const fullResult = await streamRegexMatches(editor, text, regex, 0, editor.document.lineCount - 1, myToken);
-			if (fullResult.total === -1) return;
+			const fullResult = await streamRegexMatches(editor, text, regex, winStartOff, winEndOff, myToken);
+			if (fullResult.total === -1) return; // superseded by a newer scan
+			if (fullResult.total === -2) {
+				statusBar.text = `${regexIcon} $(warning)`;
+				statusBar.tooltip =
+					`Instant Count: regex scan timed out after ${REGEX_TIMEOUT_MS} ms. ` +
+					'The pattern may backtrack catastrophically - try making it more specific.';
+				statusBar.show();
+				return;
+			}
 			cachedAllMatches = fullResult.windowMatches;
 			total = fullResult.total;
-
-
 		} else {
-			const fullResult = await streamLiteralMatches(editor, text, searchInfo.searchPattern, 0, editor.document.lineCount - 1, myToken);
-			if (fullResult.total === -1) return;
+			const fullResult = await streamLiteralMatches(editor, text, searchInfo.searchPattern, winStartOff, winEndOff, myToken);
+			if (fullResult.total === -1) return; // superseded by a newer scan
 			cachedAllMatches = fullResult.windowMatches;
 			total = fullResult.total;
 		}
@@ -368,16 +432,13 @@ async function updateCounts() {
 		const isMultiSelect = nonEmptySelections.length > 1;
 		const hasCustomRules = useRegex && customTransformRules;
 
-		// Use our new helper to make whitespace in the selection visible
+		// Use our helper to make whitespace in the selection visible
 		const formattedDisplayText = formatWhitespaceForMarkdown(searchInfo.searchDisplayText);
-		// const regex = buildRegex(searchInfo.searchPattern);
 
-		// Start building the Markdown content - show rules if active, otherwise show search text
+		// Build the Markdown tooltip - show rules if active, otherwise the search text
 		let tooltipContent: string;
 		if (hasCustomRules) {
 			tooltipContent = `**${total}** matches found\n\`\`\`\n${customTransformRules}\n\`\`\``;
-		} else if (useRegex && !customTransformRules) {
-			tooltipContent = `**${total}** matches found\n\n---\n\n\`\`\`\n${formattedDisplayText}\n\`\`\``;
 		} else {
 			tooltipContent = `**${total}** matches found\n\n---\n\n\`\`\`\n${formattedDisplayText}\n\`\`\``;
 		}
@@ -400,6 +461,26 @@ async function updateCounts() {
 		statusBar.tooltip = `Instant Count error: ${(err as Error).message}`;
 		statusBar.show();
 	}
+}
+
+// True when the file exceeds the full-feature limits (large-file mode applies)
+function isOversized(doc: vscode.TextDocument): boolean {
+	const size = doc.offsetAt(doc.lineAt(doc.lineCount - 1).range.end);
+	return size > FULL_FEATURE_BYTES || doc.lineCount > FULL_FEATURE_LINES;
+}
+
+// Raw selection text or word under cursor, ignoring regex rules/whole-word
+function getRawNeedle(editor: vscode.TextEditor): string | null {
+	if (!editor.selection.isEmpty) {
+		const t = editor.document.getText(editor.selection);
+		if (t.trim()) return t;
+	}
+	const wr = editor.document.getWordRangeAtPosition(editor.selection.active);
+	if (wr) {
+		const w = editor.document.getText(wr);
+		if (w.trim()) return w;
+	}
+	return null;
 }
 
 
@@ -447,6 +528,15 @@ function getSearchPattern(
 		if (txt.trim()) {
 			if (useRegex && customTransformRules) {
 				return createSearchResult(applyRules(txt), txt, true);
+			}
+			// Honor whole-word for selections: add \b only where the selection edge
+			// is a word character, so punctuation/whitespace edges behave sensibly.
+			if (cfg.get<boolean>('wholeWord', false)) {
+				const prefix = /^\w/.test(txt) ? '\\b' : '';
+				const suffix = /\w$/.test(txt) ? '\\b' : '';
+				if (prefix || suffix) {
+					return createSearchResult(`${prefix}${escapeRegex(txt)}${suffix}`, txt, true);
+				}
 			}
 			// For literal matching, use the raw text without escaping
 			return createSearchResult(txt, txt, false);
@@ -509,47 +599,33 @@ function escapeRegex(text: string) {
 	return (text || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-// Run a regex with a watchdog (still used by other commands)
+// Run a regex over the FULL text with periodic yields and a watchdog.
+// Unlike a chunked scan, this never misses matches that span chunk boundaries.
 async function runRegexWithTimeout(
 	text: string,
 	regex: RegExp,
-	timeoutMs = 500
+	timeoutMs = REGEX_TIMEOUT_MS
 ): Promise<RegExpMatchArray[] | null> {
 	const safe = regex.global ? regex : new RegExp(regex.source, regex.flags + 'g');
-	return new Promise(resolve => {
-		let finished = false;
-		const matches: RegExpMatchArray[] = [];
-		const start = Date.now();
-		const chunkSize = 50000;
-		let idx = 0;
-		const run = () => {
-			if (finished) return;
-			if (Date.now() - start > timeoutMs) {
-				finished = true;
-				resolve(null);
-				return;
+	safe.lastIndex = 0;
+	const start = Date.now();
+	const matches: RegExpMatchArray[] = [];
+	let sinceYield = 0;
+	try {
+		let m: RegExpExecArray | null;
+		while ((m = safe.exec(text)) !== null) {
+			matches.push(m);
+			if (m[0].length === 0) safe.lastIndex++; // zero-length guard
+			if (Date.now() - start > timeoutMs) return null;
+			if (++sinceYield >= 500) {
+				sinceYield = 0;
+				await new Promise<void>(resolve => requestAnimationFramePolyfill(resolve));
 			}
-			const chunk = text.slice(idx, idx + chunkSize);
-			try {
-				const mAll = Array.from(chunk.matchAll(safe));
-				mAll.forEach(m => {
-					if (m.index != null) m.index += idx;
-				});
-				matches.push(...mAll);
-			} catch {
-				finished = true;
-				resolve(null);
-				return;
-			}
-			idx += chunkSize;
-			if (idx < text.length) requestAnimationFramePolyfill(run);
-			else {
-				finished = true;
-				resolve(matches);
-			}
-		};
-		requestAnimationFramePolyfill(run);
-	});
+		}
+	} catch {
+		return null;
+	}
+	return matches;
 }
 async function toggleCaseSensitive() {
 	const cfg = vscode.workspace.getConfiguration('instant-count');
@@ -624,12 +700,14 @@ async function enterRegexPattern() {
 }
 
 async function showConfigPanel() {
-	// Function to get fresh configuration items with debugging
+	// Actions that open other UI (input box, peek, selection) dismiss the panel;
+	// simple toggles refresh it in place.
+	const dismissingActions = new Set(['enterRegex', 'peekAll', 'selectAll']);
+
 	const getConfigItems = async () => {
 		// Force reload regex rules from config
 		loadRegexRulesFromConfig();
 
-		// Get fresh configuration instance
 		const config = vscode.workspace.getConfiguration('instant-count');
 		const caseSensitive = config.get<boolean>('caseSensitive', false);
 		const wholeWord = config.get<boolean>('wholeWord', false);
@@ -637,8 +715,7 @@ async function showConfigPanel() {
 		const showGutterBadges = config.get<boolean>('showGutterBadges', true);
 		const showInStatusBar = config.get<boolean>('showInStatusBar', true);
 
-		// Debug logging
-		console.log('QuickPick - Config Values:', { caseSensitive, wholeWord, useRegex, showGutterBadges, showInStatusBar, customTransformRules });
+		dbg('config panel values', { caseSensitive, wholeWord, useRegex, showGutterBadges, showInStatusBar, customTransformRules });
 
 		return [
 			{
@@ -688,71 +765,66 @@ async function showConfigPanel() {
 			{
 				label: '$(eye) Peek All Matches',
 				description: 'View in peek panel',
-				detail: 'Show all matches in peek view (Ctrl+Shift+3)',
+				detail: 'Show all matches in peek view (Ctrl+Shift+Alt+P)',
 				action: 'peekAll'
 			},
 			{
 				label: '$(selection) Select All Matches',
 				description: 'Multi-cursor selection',
-				detail: 'Select all occurrences for editing (Ctrl+Shift+Alt+L)',
+				detail: 'Select all occurrences for editing (Ctrl+Shift+Alt+S)',
 				action: 'selectAll'
+			},
+			{
+				label: '$(arrow-right) Go to Next / Previous Match',
+				description: 'Ctrl+Shift+Alt+. / Ctrl+Shift+Alt+,',
+				detail: 'Jump between matches without touching the Find widget',
+				action: 'nextMatch'
 			}
 		];
 	};
 
-	// Create initial items
-	const items = await getConfigItems();
-
-	// Show interactive quick pick
 	const quickPick = vscode.window.createQuickPick();
-	quickPick.items = items;
+	let disposed = false;
+	quickPick.items = await getConfigItems();
 	quickPick.placeholder = 'Instant Count Configuration - Click to toggle settings';
-	quickPick.title = 'Instant Count Settings';
+	quickPick.title = 'Instant Count Settings (Ctrl+Shift+Alt+C)';
 	quickPick.canSelectMany = false;
-	quickPick.ignoreFocusOut = false;
+	// Keep the panel open while toggling settings and watching the count change;
+	// Esc or picking a dismissing action closes it.
+	quickPick.ignoreFocusOut = true;
 
-	// Handle selection with robust refresh logic
 	quickPick.onDidAccept(async () => {
 		const selection = quickPick.selectedItems[0] as any;
-		if (selection && selection.action) {
-			console.log('QuickPick - Executing action:', selection.action);
+		if (!selection || !selection.action) return;
+		dbg('config panel action', selection.action);
 
-			try {
-				// Execute the action and wait for completion
+		try {
+			if (dismissingActions.has(selection.action)) {
+				// These open other UI - close the panel first, then run them.
+				quickPick.hide();
 				await executeConfigAction(selection.action);
-
-				// Wait longer for configuration to propagate (VS Code can be slow)
-				await new Promise(resolve => setTimeout(resolve, 50));
-
-				// Force refresh with new config values
-				const updatedItems = await getConfigItems();
-				quickPick.items = updatedItems;
-
-				console.log('QuickPick - Panel refreshed successfully');
-			} catch (error) {
-				console.error('QuickPick - Error executing action:', error);
-				void vscode.window.showErrorMessage(`Failed to execute action: ${selection.action}`);
+				return;
 			}
+			await executeConfigAction(selection.action);
+			if (!disposed) {
+				quickPick.items = await getConfigItems();
+			}
+		} catch (error) {
+			console.error('Instant Count: config panel action failed:', error);
+			void vscode.window.showErrorMessage(`Failed to execute action: ${selection.action}`);
 		}
 	});
 
-	// Handle dismissal
 	quickPick.onDidHide(() => {
-		// wrap in trycatch to avoid errors if disposed
-		try {
-			// pass this line
-			quickPick.dispose();
-
-		} catch (error) {
-			console.error('😭😭😭QuickPick - Error on dismiss:', error);
-		}
+		disposed = true;
+		quickPick.dispose();
 	});
 
 	quickPick.show();
 }
 
 async function executeConfigAction(action: string) {
-	console.log('Executing config action:', action);
+	dbg('executing config action:', action);
 
 	try {
 		switch (action) {
@@ -783,10 +855,13 @@ async function executeConfigAction(action: string) {
 			case 'selectAll':
 				await vscode.commands.executeCommand('instant-count.selectAll');
 				break;
+			case 'nextMatch':
+				await vscode.commands.executeCommand('instant-count.nextMatch');
+				break;
 			default:
 				console.warn('Unknown action:', action);
 		}
-		console.log('Config action completed:', action);
+		dbg('config action completed:', action);
 	} catch (error) {
 		console.error('Error executing config action:', action, error);
 		throw error;
@@ -796,6 +871,10 @@ async function executeConfigAction(action: string) {
 async function selectAllOccurrences() {
 	const editor = vscode.window.activeTextEditor;
 	if (!editor) return;
+	if (isOversized(editor.document)) {
+		void vscode.window.showInformationMessage('Instant Count: Select All is unavailable in large-file mode.');
+		return;
+	}
 	const info = getSearchPattern(editor);
 	if (!info) return;
 	const matches = await processMatchesAsync(
@@ -803,6 +882,8 @@ async function selectAllOccurrences() {
 		buildRegex(info.searchPattern)
 	);
 	if (!matches.length) return;
+	// Keep the current pattern/count pinned while we replace the selection
+	programmaticSelectionGuard = true;
 	editor.selections = matches.map(m => {
 		const s = editor.document.positionAt(m.index!);
 		const e = editor.document.positionAt(m.index! + m[0].length);
@@ -813,6 +894,10 @@ async function selectAllOccurrences() {
 async function peekAllOccurrences() {
 	const editor = vscode.window.activeTextEditor;
 	if (!editor) return;
+	if (isOversized(editor.document)) {
+		void vscode.window.showInformationMessage('Instant Count: Peek All is unavailable in large-file mode.');
+		return;
+	}
 	const info = getSearchPattern(editor);
 	if (!info) return;
 	const rx = buildRegex(info.searchPattern);
@@ -831,6 +916,39 @@ async function peekAllOccurrences() {
 		'peek',
 		`${matches.length} matches`
 	);
+}
+
+// Jump to the next/previous occurrence of the current pattern (wraps around).
+// The selection is set programmatically so the active pattern/count stays pinned.
+async function navigateMatch(direction: 1 | -1) {
+	const editor = vscode.window.activeTextEditor;
+	if (!editor) return;
+	if (isOversized(editor.document)) {
+		void vscode.window.showInformationMessage('Instant Count: match navigation is unavailable in large-file mode.');
+		return;
+	}
+	const info = getSearchPattern(editor);
+	if (!info) return;
+	const doc = editor.document;
+	const matches = await processMatchesAsync(doc.getText(), buildRegex(info.searchPattern));
+	if (!matches.length) return;
+
+	const cursor = doc.offsetAt(editor.selection.active);
+	let target: RegExpMatchArray | undefined;
+	if (direction === 1) {
+		target = matches.find(m => m.index! > cursor) ?? matches[0]; // wrap to first
+	} else {
+		for (let i = matches.length - 1; i >= 0; i--) {
+			if (matches[i].index! + matches[i][0].length < cursor) { target = matches[i]; break; }
+		}
+		target = target ?? matches[matches.length - 1]; // wrap to last
+	}
+
+	const s = doc.positionAt(target.index!);
+	const e = doc.positionAt(target.index! + target[0].length);
+	programmaticSelectionGuard = true;
+	editor.selection = new vscode.Selection(s, e);
+	editor.revealRange(new vscode.Range(s, e), vscode.TextEditorRevealType.InCenterIfOutsideViewport);
 }
 
 // Clear saved rules
@@ -906,12 +1024,12 @@ async function updateGutterBadgesAsync(
 		return; // No changes needed
 	}
 
-	// Create global occurrence mapping
+	// Map each line to the global occurrence number of its first match
 	const lineToGlobalOccurrence = new Map<number, number>();
-	for (let i = 0; i < allMatches.length; i++) {
-		const lineNum = allMatches[i].start.line;
+	for (const cm of allMatches) {
+		const lineNum = cm.range.start.line;
 		if (!lineToGlobalOccurrence.has(lineNum)) {
-			lineToGlobalOccurrence.set(lineNum, i + 1);
+			lineToGlobalOccurrence.set(lineNum, cm.occ);
 		}
 	}
 
@@ -925,7 +1043,7 @@ async function updateGutterBadgesAsync(
 
 	// Include all matches in buffer window
 	for (const match of allMatches) {
-		const lineNum = match.start.line;
+		const lineNum = match.range.start.line;
 		if (lineNum >= bufferStartLine && lineNum <= bufferEndLine &&
 			!breakpoints.has(lineNum) && lineToGlobalOccurrence.has(lineNum)) {
 			newActiveLines.add(lineNum);
@@ -992,12 +1110,18 @@ async function updateGutterBadgesAsync(
 	};
 }
 
-// Create an SVG badge for the gutter with the occurrence number
+// Create an SVG badge for the gutter with the occurrence number.
+// Colors are theme-aware (SVG gutter icons can't use CSS variables).
 function createNumberedBadgeSvg(n: number) {
 	const txt = n.toString();
 	const w = Math.max(3, txt.length * 2.5 + 0.5);
+	const kind = vscode.window.activeColorTheme.kind;
+	const isLight =
+		kind === vscode.ColorThemeKind.Light || kind === vscode.ColorThemeKind.HighContrastLight;
+	const fill = isLight ? '#444' : '#aaa';
+	const opacity = isLight ? 0.5 : 0.35;
 	const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="8" viewBox="0 0 ${w} 8">
-	<text x="${w / 2}" y="4.5" fill="#aaa" fill-opacity="0.25"
+	<text x="${w / 2}" y="4.5" fill="${fill}" fill-opacity="${opacity}"
 		font-size="5" font-family="system-ui,-apple-system,sans-serif"
 		text-anchor="middle" dominant-baseline="middle">${txt}</text></svg>`;
 	return vscode.Uri.parse(`data:image/svg+xml,${encodeURIComponent(svg)}`);

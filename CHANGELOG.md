@@ -5,6 +5,30 @@ adheres to [Semantic Versioning](https://semver.org/)._
 
 ---
 
+## [1.1.0] - 2026-07-03
+
+### Fixed
+- **Select All / Peek All no longer miss matches.** The regex scan used by these commands processed the document in independent 50k-char slices, silently dropping any match that spanned a slice boundary. It now streams over the full text, so the count and the selection always agree.
+- Zero-length regex matches (e.g. rules like `$TEXT?`) no longer stall the scanner until the watchdog fires.
+- A regex scan that hits the watchdog now shows a visible warning in the status bar instead of silently leaving a stale count.
+- **Whole Word now applies to highlighted selections.** Word boundaries are added only where the selection edge is a word character, so selections that start or end with punctuation still behave sensibly.
+- The config panel no longer risks a false "Failed to execute action" after opening the rules input; actions that open other UI (rules editor, peek, select-all) now close the panel cleanly first.
+- The Select All hint in the config panel shows the correct keybinding (was Ctrl+Shift+Alt+L, actual binding is Ctrl+Shift+Alt+S).
+- Removed `Next Page` / `Previous Page` from the Command Palette - they were declared but never implemented and errored when invoked.
+- Curly quotes are now actually normalized in the status-bar tooltip.
+
+### Added
+- **Large-file mode.** Files over 10 MB / 100k lines used to show contradictory warnings and shut off entirely. They now keep literal counting (of the raw selection or word) plus badges around the viewport, up to a 50 MB hard ceiling. Regex rules and whole-word are skipped in this mode for safety.
+- **Match navigation.** `Go to Next Match` / `Go to Previous Match` (`Ctrl+Shift+Alt+.` / `Ctrl+Shift+Alt+,`) jump between occurrences with wrap-around - and the active pattern stays pinned while you navigate, even with custom rules.
+- Keybinding for the config panel: `Ctrl+Shift+Alt+C`. The panel also stays open while you toggle settings and watch the count change (Esc closes it).
+- Gutter badges are theme-aware: darker/heavier on light themes, rebuilt automatically when the color theme changes.
+- The `instant-count.debug` setting now actually gates the extension's debug logging.
+
+### Changed
+- Consistent keybinding family: `Ctrl+Shift+Alt+C / R / S / P` for panel, rules, select-all, and peek (`Ctrl+Shift+3` still works for peek). macOS uses `Cmd` variants.
+- Scans resolve decoration positions only around the viewport, reducing per-match work on files with thousands of matches.
+
+
 ## [1.0.1] – 2025-07-15
 
 ### Fixed

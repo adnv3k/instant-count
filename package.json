@@ -2,7 +2,7 @@
 	"name": "instant-count",
 	"displayName": "Instant Count - Real-time Text Counter",
 	"description": "Instantly count highlighted text, words, and patterns with custom regex rules, live gutter badges, and status bar feedback. Perfect for code analysis and text processing.",
-	"version": "1.0.1",
+	"version": "1.1.0",
 	"publisher": "adnv3k",
 	"icon": "assets/screenshots/icon.png",
 	"galleryBanner": {
@@ -115,13 +115,13 @@
 				"category": "Instant Count"
 			},
 			{
-				"command": "instant-count.nextPage",
-				"title": "Next Page",
+				"command": "instant-count.nextMatch",
+				"title": "Go to Next Match",
 				"category": "Instant Count"
 			},
 			{
-				"command": "instant-count.prevPage",
-				"title": "Previous Page",
+				"command": "instant-count.prevMatch",
+				"title": "Go to Previous Match",
 				"category": "Instant Count"
 			}
 		],
@@ -168,18 +168,44 @@
 		},
 		"keybindings": [
 			{
-				"command": "instant-count.selectAll",
-				"key": "ctrl+shift+alt+s",
+				"command": "instant-count.showConfigPanel",
+				"key": "ctrl+shift+alt+c",
+				"mac": "cmd+shift+alt+c",
 				"when": "editorTextFocus"
 			},
 			{
 				"command": "instant-count.enterRegex",
 				"key": "ctrl+shift+alt+r",
+				"mac": "cmd+shift+alt+r",
+				"when": "editorTextFocus"
+			},
+			{
+				"command": "instant-count.selectAll",
+				"key": "ctrl+shift+alt+s",
+				"mac": "cmd+shift+alt+s",
+				"when": "editorTextFocus"
+			},
+			{
+				"command": "instant-count.peekAll",
+				"key": "ctrl+shift+alt+p",
+				"mac": "cmd+shift+alt+p",
 				"when": "editorTextFocus"
 			},
 			{
 				"command": "instant-count.peekAll",
 				"key": "ctrl+shift+3",
+				"when": "editorTextFocus"
+			},
+			{
+				"command": "instant-count.nextMatch",
+				"key": "ctrl+shift+alt+.",
+				"mac": "cmd+shift+alt+.",
+				"when": "editorTextFocus"
+			},
+			{
+				"command": "instant-count.prevMatch",
+				"key": "ctrl+shift+alt+,",
+				"mac": "cmd+shift+alt+,",
 				"when": "editorTextFocus"
 			}
 		]
